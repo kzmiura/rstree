@@ -18,7 +18,7 @@ struct Cli {
 fn visit_dirs(
     dir: &Path,
     lock: &mut impl Write,
-    paddings: &mut Vec<&str>,
+    paddings: &mut String,
     depth: Option<usize>,
     cli: &Cli,
 ) -> io::Result<()> {
@@ -28,7 +28,7 @@ fn visit_dirs(
                 res.inspect_err(|e| eprintln!("{}: {}", dir.display(), e))
                     .ok()
             })
-            .filter(|e| !e.file_name().as_encoded_bytes().starts_with(b"."))
+            .filter(|e| cli.show_hidden || !e.file_name().as_encoded_bytes().starts_with(b"."))
             .peekable();
         while let Some(entry) = entries.next() {
             let (padding, prefix) = if entries.peek().is_some() {
@@ -40,18 +40,18 @@ fn visit_dirs(
             writeln!(
                 lock,
                 "{}{}{}",
-                paddings.concat(),
+                paddings,
                 prefix,
                 file_name.display()
             )?;
 
             let path = entry.path();
             if path.is_dir() {
-                paddings.push(padding);
+                paddings.push_str(padding);
                 if let Err(e) = visit_dirs(&path, lock, paddings, depth.map(|d| d - 1), cli) {
                     eprintln!("{}: {}", path.display(), e);
                 }
-                paddings.pop();
+                paddings.truncate(paddings.len() - padding.len());
             }
         }
     }
@@ -63,7 +63,7 @@ fn main() -> io::Result<()> {
 
     let mut lock = io::stdout().lock();
     writeln!(lock, "{}", cli.dir.display())?;
-    visit_dirs(&cli.dir, &mut lock, &mut vec![], cli.depth, &cli)?;
+    visit_dirs(&cli.dir, &mut lock, &mut String::new(), cli.depth, &cli)?;
 
     Ok(())
 }
