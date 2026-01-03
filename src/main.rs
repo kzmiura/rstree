@@ -14,6 +14,8 @@ struct Cli {
     depth: Option<u32>,
     #[arg(short = 'a', long)]
     show_hidden: bool,
+    #[arg(short, long)]
+    follow_symlinks: bool,
 }
 
 #[derive(Debug, Default)]
@@ -32,42 +34,54 @@ fn visit_dirs(
     let Cli {
         show_hidden,
         depth: max_depth,
+        follow_symlinks,
         ..
     } = *cli;
     let mut summary = Summary::default();
     if max_depth.is_none_or(|max| depth < max) {
         match fs::read_dir(dir) {
             Ok(entries) => {
-                let mut v: Box<[_]> = entries
+                let mut v: Vec<_> = entries
                     .filter_map(|r| r.inspect_err(|e| eprintln!("{}", e)).ok())
                     .filter(|e| {
                         show_hidden || e.file_name().to_str().is_none_or(|n| !n.starts_with('.'))
                     })
                     .collect();
-                v.sort_by_key(|e| e.file_name());
-                for (i, entry) in v.iter().enumerate() {
-                    let (prefix, connector) = if i + 1 == v.len() {
-                        ("   ", "\u{2514}\u{2500} ")
+                v.sort_by_key(|e| e.file_name().to_ascii_lowercase());
+                let mut iter = v.into_iter().peekable();
+                while let Some(entry) = iter.next() {
+                    let (prefix, connector) = if iter.peek().is_none() {
+                        ("    ", "\u{2514}\u{2500}\u{2500} ")
                     } else {
-                        ("\u{2502}  ", "\u{251C}\u{2500} ")
+                        ("\u{2502}   ", "\u{251C}\u{2500}\u{2500} ")
                     };
                     let path = entry.path();
                     let file_name = entry.file_name();
-                    writeln!(
+                    let file_type = entry.file_type()?;
+
+                    write!(
                         handle,
                         "{}{}{}",
                         prefixes.concat(),
                         connector,
                         file_name.display(),
                     )?;
+                    if file_type.is_symlink() {
+                        let dest = path.read_link()?;
+                        write!(handle, " -> {}", dest.display())?;
+                    }
+                    writeln!(handle)?;
+
                     if path.is_dir() {
                         summary.dirs += 1;
-                        prefixes.push(prefix);
-                        let Summary { dirs, files } =
-                            visit_dirs(&path, handle, prefixes, depth + 1, cli)?;
-                        summary.dirs += dirs;
-                        summary.files += files;
-                        prefixes.pop();
+                        if follow_symlinks || !file_type.is_symlink() {
+                            prefixes.push(prefix);
+                            let Summary { dirs, files } =
+                                visit_dirs(&path, handle, prefixes, depth + 1, cli)?;
+                            prefixes.pop();
+                            summary.dirs += dirs;
+                            summary.files += files;
+                        }
                     } else if path.is_file() {
                         summary.files += 1;
                     }
